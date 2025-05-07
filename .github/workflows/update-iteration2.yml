@@ -1,21 +1,207 @@
-name: Update Iteration on Status Change
+name: Update In Progress Items to Current Sprint
 
 on:
-  workflow_dispatch:
-  project:
-    types: [updated]
-    
+  workflow_dispatch:  # Allows manual triggering
+  schedule:
+    - cron: '0 5 * * 1'  # Runs at 5:00 AM every Monday
+
 jobs:
-  update-iteration:
+  update-sprint-iteration:
     runs-on: ubuntu-latest
-    if: github.event.project.column_name == 'In Progress'
     
     steps:
-      - name: Add to current iteration
-        uses: leonsteinhaeuser/project-beta-automations@v2.1.0
-        with:
-          github_token: PROJECTS_TEST
-          organization: jazzcattest
-          number: 16
-          iteration-field: Sprint
-          iteration_value: CURRENT # Set to CURRENT to use the current iteration
+      - name: Set up environment
+        run: |
+          echo "Current date and time: $(date +'%Y-%m-%d %H:%M:%S')"
+          echo "Starting project item update process..."
+      
+      - name: Update issues to current sprint
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_PAT }}
+        run: |
+          # Get project ID for project 16
+          PROJECT_ID=$(gh api graphql -f query='
+            query {
+              organization(login:"jazzcattest") {
+                projectV2(number:16) {
+                  id
+                }
+              }
+            }
+          ' --jq '.data.organization.projectV2.id')
+          echo "Project ID: $PROJECT_ID"
+          
+          # Get fields information (Status and Iteration fields)
+          FIELDS=$(gh api graphql -f query='
+            query {
+              organization(login:"jazzcattest") {
+                projectV2(number:16) {
+                  fields(first:50) {
+                    nodes {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                        options {
+                          id
+                          name
+                        }
+                      }
+                      ... on ProjectV2IterationField {
+                        id
+                        name
+                        configuration {
+                          iterations {
+                            nodes {
+                              id
+                              title
+                              startDate
+                              endDate
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ')
+          
+          # Extract Status field ID
+          STATUS_FIELD_ID=$(echo "$FIELDS" | jq -r '.data.organization.projectV2.fields.nodes[] | select(.name=="Status") | .id')
+          echo "Status field ID: $STATUS_FIELD_ID"
+          
+          # Extract Iteration field info
+          ITERATION_FIELD=$(echo "$FIELDS" | jq -r '.data.organization.projectV2.fields.nodes[] | select(.name=="Iteration")')
+          ITERATION_FIELD_ID=$(echo "$ITERATION_FIELD" | jq -r '.id')
+          echo "Iteration field ID: $ITERATION_FIELD_ID"
+          
+          # Get current date in YYYY-MM-DD format
+          TODAY="2025-05-07" # Using your provided date
+          echo "Current date: $TODAY"
+          
+          # Find current sprint iteration based on date
+          CURRENT_ITERATION=$(echo "$ITERATION_FIELD" | jq -r --arg today "$TODAY" '.configuration.iterations.nodes[] | select(.startDate <= $today and .endDate >= $today) | .id')
+          CURRENT_ITERATION_TITLE=$(echo "$ITERATION_FIELD" | jq -r --arg today "$TODAY" '.configuration.iterations.nodes[] | select(.startDate <= $today and .endDate >= $today) | .title')
+          
+          echo "Current Sprint: $CURRENT_ITERATION_TITLE (ID: $CURRENT_ITERATION)"
+          
+          if [ -z "$CURRENT_ITERATION" ]; then
+            echo "Error: No active sprint found for today's date ($TODAY)"
+            exit 1
+          fi
+          
+          # Get all items in the project
+          echo "Fetching project items..."
+          ITEMS=$(gh api graphql -f query='
+            query {
+              organization(login:"jazzcattest") {
+                projectV2(number:16) {
+                  items(first:100) {
+                    nodes {
+                      id
+                      content {
+                        ... on Issue { 
+                          id
+                          title
+                          url
+                        }
+                        ... on PullRequest { 
+                          id
+                          title
+                          url
+                        }
+                      }
+                      fieldValues(first:50) {
+                        nodes {
+                          ... on ProjectV2ItemFieldSingleSelectValue {
+                            field { id }
+                            name
+                          }
+                          ... on ProjectV2ItemFieldIterationValue {
+                            field { id }
+                            iterationId
+                            title
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ')
+          
+          # Initialize counters
+          TOTAL_ITEMS=0
+          UPDATED_ITEMS=0
+          SKIPPED_ITEMS=0
+          
+          # Process items to find and update those in "In Progress" status
+          echo "$ITEMS" | jq -c '.data.organization.projectV2.items.nodes[]' | while read -r item; do
+            ((TOTAL_ITEMS++))
+            
+            ITEM_ID=$(echo "$item" | jq -r '.id')
+            ITEM_TITLE=$(echo "$item" | jq -r '.content.title // "No title"')
+            ITEM_URL=$(echo "$item" | jq -r '.content.url // "#"')
+            
+            # Get the status value
+            STATUS=$(echo "$item" | jq -r --arg field_id "$STATUS_FIELD_ID" '.fieldValues.nodes[] | select(.field.id==$field_id) | .name // ""')
+            
+            # Get the current iteration value
+            CURRENT_ITEM_ITERATION=$(echo "$item" | jq -r --arg field_id "$ITERATION_FIELD_ID" '.fieldValues.nodes[] | select(.field.id==$field_id) | .iterationId // ""')
+            CURRENT_ITEM_ITERATION_TITLE=$(echo "$item" | jq -r --arg field_id "$ITERATION_FIELD_ID" '.fieldValues.nodes[] | select(.field.id==$field_id) | .title // "None"')
+            
+            echo "Checking: $ITEM_TITLE"
+            echo "  Status: $STATUS"
+            echo "  Current iteration: $CURRENT_ITEM_ITERATION_TITLE"
+            
+            # Check if item needs updating (is "In Progress" but doesn't have current iteration)
+            if [ "$STATUS" = "In Progress" ]; then
+                if [ "$CURRENT_ITEM_ITERATION" != "$CURRENT_ITERATION" ]; then
+                    echo "  Updating to Sprint: $CURRENT_ITERATION_TITLE"
+                    
+                    # Update the iteration field for this item
+                    UPDATE_RESULT=$(gh api graphql -f query='
+                      mutation {
+                        updateProjectV2ItemFieldValue(
+                          input: {
+                            projectId: "'"$PROJECT_ID"'"
+                            itemId: "'"$ITEM_ID"'"
+                            fieldId: "'"$ITERATION_FIELD_ID"'"
+                            value: {
+                              iterationId: "'"$CURRENT_ITERATION"'"
+                            }
+                          }
+                        ) {
+                          projectV2Item {
+                            id
+                          }
+                        }
+                      }
+                    ')
+                    
+                    if [[ "$UPDATE_RESULT" == *"$ITEM_ID"* ]]; then
+                        echo "  ✓ Updated successfully"
+                        ((UPDATED_ITEMS++))
+                    else
+                        echo "  ✗ Update failed"
+                    fi
+                else
+                    echo "  Already in current sprint - no update needed"
+                    ((SKIPPED_ITEMS++))
+                fi
+            else
+                echo "  Not in 'In Progress' status - no update needed"
+                ((SKIPPED_ITEMS++))
+            fi
+            
+            echo ""
+          done
+          
+          # Print summary
+          echo "============ SUMMARY ============"
+          echo "Total items checked: $TOTAL_ITEMS"
+          echo "Items updated to current sprint: $UPDATED_ITEMS"
+          echo "Items skipped (no update needed): $SKIPPED_ITEMS"
+          echo "================================="
