@@ -1,7 +1,6 @@
 name: Add to Current Iteration When Status In Progress
 
 on:
-  on:
   schedule:
     - cron:
 
