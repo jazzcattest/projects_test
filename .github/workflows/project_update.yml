@@ -13,7 +13,7 @@ jobs:
       - name: Add to current iteration
         uses: leonsteinhaeuser/project-beta-automations@v2.1.0
         with:
-          github_token: PROJECT_TEST
+          github_token: PROJECTS_TEST
           organization: jazzcattest
           number: 16
           iteration-field: Sprint
