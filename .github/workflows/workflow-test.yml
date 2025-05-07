@@ -13,6 +13,6 @@ jobs:
         number: 16
         token: ${{ secrets.PROJECT_PAT }}
         iteration-field: Sprint
-        iteration: last
+        iteration: planned
         new-iteration: current
         statuses: 'In Progress'
