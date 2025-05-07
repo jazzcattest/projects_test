@@ -1,9 +1,9 @@
 name: Add to Current Iteration When Status In Progress
 
 on:
-  schedule:
-    - cron: '*/1 * * * *'  # Run every 1 minutes
-  workflow_dispatch:  # Allow manual trigger for testing
+  workflow_dispatch: # For manual testing
+  repository_dispatch:
+    types: [project_item_changed]
 
 jobs:
   update-iteration:
