@@ -1,0 +1,21 @@
+name: Update Iteration on Status Change
+
+on:
+  workflow_dispatch:
+  project:
+    types: [updated]
+    
+jobs:
+  update-iteration:
+    runs-on: ubuntu-latest
+    if: github.event.project.column_name == 'In Progress'
+    
+    steps:
+      - name: Add to current iteration
+        uses: leonsteinhaeuser/project-beta-automations@v2.1.0
+        with:
+          github_token: PROJECTS_TEST
+          organization: jazzcattest
+          number: 16
+          iteration-field: Sprint
+          iteration_value: CURRENT # Set to CURRENT to use the current iteration
