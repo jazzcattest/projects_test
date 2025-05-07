@@ -1,8 +1,6 @@
 on:
-  schedule:
-    # Runs "at 05:00, only on Monday" (see https://crontab.guru)
-    - cron: '0 5 * * 1'
-
+  workflow_dispatch:
+    
 jobs:
   move-to-next-iteration:
     name: Move to next iteration
