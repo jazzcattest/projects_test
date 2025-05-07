@@ -1,9 +1,10 @@
 name: Update Iteration on Status Change
 
 on:
-  project_card:
-    types: [moved]
-
+  workflow_dispatch:
+  project:
+    types: [updated]
+    
 jobs:
   update-iteration:
     runs-on: ubuntu-latest
