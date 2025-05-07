@@ -1,0 +1,182 @@
+name: Add to Current Iteration When Status In Progress
+
+on:
+  issues:
+    types: [labeled, unlabeled, edited]
+  pull_request:
+    types: [labeled, unlabeled, edited]
+
+jobs:
+  update-iteration:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request' }}
+    
+    steps:
+      - name: Check if item is "In Progress"
+        id: check-status
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          ITEM_ID: ${{ github.event.issue.node_id || github.event.pull_request.node_id }}
+          ORG: "jazzcattest"
+          PROJECT_NUMBER: 16
+        run: |
+          # Get project ID
+          PROJECT_ID=$(gh api graphql -f query='
+            query {
+              organization(login:"jazzcattest") {
+                projectV2(number:16) {
+                  id
+                }
+              }
+            }
+          ' -q '.data.organization.projectV2.id')
+          echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
+          
+          # Get item ID in project
+          ITEM_NODE=$(gh api graphql -f query='
+            query {
+              organization(login:"jazzcattest") {
+                projectV2(number:16) {
+                  items(first:100) {
+                    nodes {
+                      id
+                      content {
+                        ... on Issue { id }
+                        ... on PullRequest { id }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ' -q ".data.organization.projectV2.items.nodes[] | select(.content.id==\"$ITEM_ID\")")
+          
+          if [ -z "$ITEM_NODE" ]; then
+            echo "Item not found in project"
+            exit 0
+          fi
+          
+          ITEM_PROJECT_ID=$(echo "$ITEM_NODE" | jq -r '.id')
+          echo "ITEM_PROJECT_ID=$ITEM_PROJECT_ID" >> $GITHUB_ENV
+          
+          # Find Status field
+          STATUS_FIELD=$(gh api graphql -f query='
+            query {
+              organization(login:"jazzcattest") {
+                projectV2(number:16) {
+                  fields(first:20) {
+                    nodes {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ' -q '.data.organization.projectV2.fields.nodes[] | select(.name=="Status")')
+          
+          STATUS_FIELD_ID=$(echo "$STATUS_FIELD" | jq -r '.id')
+          echo "STATUS_FIELD_ID=$STATUS_FIELD_ID" >> $GITHUB_ENV
+          
+          # Get current status
+          CURRENT_STATUS=$(gh api graphql -f query='
+            query {
+              organization(login:"jazzcattest") {
+                projectV2(number:16) {
+                  items(first:100) {
+                    nodes {
+                      id
+                      fieldValues(first:20) {
+                        nodes {
+                          ... on ProjectV2ItemFieldSingleSelectValue {
+                            field { id }
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ' -q ".data.organization.projectV2.items.nodes[] | select(.id==\"$ITEM_PROJECT_ID\") | .fieldValues.nodes[] | select(.field.id==\"$STATUS_FIELD_ID\") | .name")
+          
+          if [ "$CURRENT_STATUS" = "In Progress" ]; then
+            echo "IS_IN_PROGRESS=true" >> $GITHUB_ENV
+          else
+            echo "IS_IN_PROGRESS=false" >> $GITHUB_ENV
+          fi
+
+      - name: Add to current iteration if In Progress
+        if: env.IS_IN_PROGRESS == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          # Find Iteration field
+          ITERATION_FIELD=$(gh api graphql -f query='
+            query {
+              organization(login:"jazzcattest") {
+                projectV2(number:16) {
+                  fields(first:20) {
+                    nodes {
+                      ... on ProjectV2IterationField {
+                        id
+                        name
+                        configuration {
+                          iterations {
+                            nodes {
+                              id
+                              title
+                              startDate
+                              endDate
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ' -q '.data.organization.projectV2.fields.nodes[] | select(.name=="Iteration")')
+          
+          ITERATION_FIELD_ID=$(echo "$ITERATION_FIELD" | jq -r '.id')
+          
+          # Get current date in YYYY-MM-DD format
+          TODAY=$(date +%Y-%m-%d)
+          
+          # Find current iteration based on date range
+          CURRENT_ITERATION=$(echo "$ITERATION_FIELD" | jq -r --arg today "$TODAY" '.configuration.iterations.nodes[] | select(.startDate <= $today and .endDate >= $today) | .id')
+          
+          if [ -z "$CURRENT_ITERATION" ]; then
+            echo "No current iteration found for today's date"
+            exit 0
+          fi
+          
+          # Update the iteration field
+          gh api graphql -f query='
+            mutation {
+              updateProjectV2ItemFieldValue(
+                input: {
+                  projectId: "'"$PROJECT_ID"'"
+                  itemId: "'"$ITEM_PROJECT_ID"'"
+                  fieldId: "'"$ITERATION_FIELD_ID"'"
+                  value: {
+                    iterationId: "'"$CURRENT_ITERATION"'"
+                  }
+                }
+              ) {
+                projectV2Item {
+                  id
+                }
+              }
+            }
+          '
+          
+          echo "Updated item to current iteration successfully"
