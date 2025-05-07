@@ -1,9 +1,9 @@
 name: Add to Current Iteration When Status In Progress
 
 on:
+  on:
   schedule:
-    - cron: '*/5 * * * *'  # Run every 5 minutes
-  workflow_dispatch:  # Allow manual trigger for testing
+    - cron:
 
 jobs:
   update-iteration:
